@@ -400,21 +400,73 @@ def predict_and_show(model, dataloader, dataset_type='mnist', indices=None, devi
         
         return predictions, sample_targets, sample_inputs
 
-def train_model(model, dataloader, criterion, optimizer, num_epochs=100, device=None, verbose=False, seed=42, continue_training=False):
+# def train_model(model, dataloader, criterion, optimizer, num_epochs=100, device=None, verbose=False, seed=42, continue_training=False):
+#     if device is None:
+#         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+#     if not continue_training:
+#         set_seed(seed)
+#         init_weights(model, seed)
+    
+#     model.to(device)
+#     model.train()
+#     losses = []
+    
+#     if verbose:
+#         print(f"Training on device: {device}")
+    
+#     for epoch in range(num_epochs):
+#         epoch_loss = 0.0
+#         for inputs, targets in dataloader:
+#             inputs, targets = inputs.to(device), targets.to(device)
+#             optimizer.zero_grad()
+#             outputs = model(inputs)
+#             loss = criterion(outputs, targets)
+#             loss.backward()
+#             optimizer.step()
+#             epoch_loss += loss.item()
+        
+#         avg_loss = epoch_loss / len(dataloader)
+#         losses.append(avg_loss)
+        
+#         if verbose and (epoch + 1) % 20 == 0:
+#             print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.6f}')
+    
+#     return losses, model
+
+def train_model(model, dataloader, criterion, optimizer, num_epochs=100, device=None, verbose=False, seed=42, continue_training=False, test_loader=None, return_val=False):
+    """
+    Train the model.
+
+    Backwards compatible:
+      - By default returns (losses, model) as before.
+
+    New functionality:
+      - If test_loader is provided, computes validation loss (and accuracy for classification)
+        at the end of each epoch and stores them in val_losses / val_accuracies.
+      - If return_val=True and test_loader is provided, returns (losses, model, val_losses, val_accuracies).
+
+    Args:
+        test_loader: optional DataLoader used to evaluate after each epoch.
+        return_val: if True and test_loader provided, include val lists in return.
+    """
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
+
     if not continue_training:
         set_seed(seed)
         init_weights(model, seed)
-    
+
     model.to(device)
     model.train()
     losses = []
-    
+
+    val_losses = [] if test_loader is not None else None
+    val_accuracies = [] if test_loader is not None else None
+
     if verbose:
         print(f"Training on device: {device}")
-    
+
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         for inputs, targets in dataloader:
@@ -425,14 +477,129 @@ def train_model(model, dataloader, criterion, optimizer, num_epochs=100, device=
             loss.backward()
             optimizer.step()
             epoch_loss += loss.item()
-        
+
         avg_loss = epoch_loss / len(dataloader)
         losses.append(avg_loss)
-        
+
+        # Evaluate on test_loader after each epoch if provided
+        if test_loader is not None:
+            val_loss, val_acc = evaluate_model(model, test_loader, criterion, device=device)
+            val_losses.append(val_loss)
+            val_accuracies.append(val_acc)
+
         if verbose and (epoch + 1) % 20 == 0:
-            print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.6f}')
-    
+            if test_loader is not None:
+                acc_str = f", Val Loss: {val_losses[-1]:.6f}"
+                if val_accuracies[-1] is not None:
+                    acc_str += f", Val Acc: {val_accuracies[-1]:.4f}"
+                print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.6f}{acc_str}')
+            else:
+                print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.6f}')
+
+    # Return results while keeping backward compatibility
+    if return_val and test_loader is not None:
+        return losses, model, val_losses, val_accuracies
     return losses, model
+
+def evaluate_model(model, dataloader, criterion, device=None):
+    """
+    Evaluate model on dataloader. Returns (loss, accuracy_or_None).
+
+    Accuracy is computed only when criterion is CrossEntropyLoss (classification),
+    otherwise returns None for accuracy (e.g., MSE regression).
+    """
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    model.eval()
+    model.to(device)
+
+    total_loss = 0.0
+    total_samples = 0
+    correct = 0
+
+    with torch.no_grad():
+        for inputs, targets in dataloader:
+            inputs, targets = inputs.to(device), targets.to(device)
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            batch_size = inputs.size(0)
+            total_loss += loss.item() * batch_size
+            total_samples += batch_size
+
+            # Compute accuracy for classification (CrossEntropy)
+            if isinstance(criterion, nn.CrossEntropyLoss):
+                preds = torch.argmax(outputs, dim=1)
+                correct += (preds == targets).sum().item()
+
+    avg_loss = total_loss / total_samples if total_samples > 0 else 0.0
+    accuracy = (correct / total_samples) if (total_samples > 0 and isinstance(criterion, nn.CrossEntropyLoss)) else None
+
+    model.train()
+    return avg_loss, accuracy
+
+def print_training_history(losses, val_losses=None, val_accuracies=None, show_last_n=10):
+    """
+    Print a concise summary of training (and optional validation) losses/accuracies.
+
+    Args:
+      losses: list of training losses per epoch
+      val_losses: optional list of validation losses per epoch
+      val_accuracies: optional list of validation accuracies per epoch (or None entries)
+      show_last_n: number of last epochs to print
+    """
+    n = len(losses)
+    start = max(0, n - show_last_n)
+    print("Training Losses (last {} epochs):".format(min(show_last_n, n)))
+    for i, l in enumerate(losses[start:], start=start+1):
+        line = f"Epoch {i:3d}: Train Loss = {l:.6f}"
+        if val_losses is not None:
+            vl = val_losses[i-1] if i-1 < len(val_losses) else None
+            if vl is not None:
+                line += f", Val Loss = {vl:.6f}"
+        if val_accuracies is not None:
+            va = val_accuracies[i-1] if i-1 < len(val_accuracies) else None
+            if va is not None:
+                line += f", Val Acc = {va:.4f}"
+        print(line)
+        
+def plot_training_history(losses, val_losses=None, val_accuracies=None, show_last_n=None, title="Training / Validation Loss", figsize=(8,4)):
+    """
+    Plot training loss and optional validation loss (line plots).
+
+    Args:
+      losses: list of training losses per epoch
+      val_losses: optional list of validation losses per epoch
+      val_accuracies: optional list of validation accuracies (not plotted here)
+      show_last_n: if set, only plot the last N epochs
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if show_last_n is not None:
+        losses_plot = losses[-show_last_n:]
+        if val_losses is not None:
+            val_losses_plot = val_losses[-show_last_n:]
+        else:
+            val_losses_plot = None
+        start_epoch = max(1, len(losses) - len(losses_plot) + 1)
+        xs = list(range(start_epoch, start_epoch + len(losses_plot)))
+    else:
+        losses_plot = losses
+        val_losses_plot = val_losses
+        xs = list(range(1, len(losses_plot) + 1))
+
+    plt.figure(figsize=figsize)
+    plt.plot(xs, losses_plot, label="Train Loss", marker="o")
+    if val_losses_plot is not None:
+        plt.plot(xs, val_losses_plot, label="Val Loss", marker="o")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title(title)
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
 def find_knn(dataset, single_sample, k=5, metric='l2'):
     """
@@ -519,7 +686,7 @@ def find_knn(dataset, single_sample, k=5, metric='l2'):
 # Updated Visualization function
 def visualize_mse_results(mse_results, list_of_indices, selected_index=None, average=False, base_mse=None):
        
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(8, 4))
     
     if selected_index is not None:
         # Visualize for a specific index
@@ -546,34 +713,101 @@ def visualize_mse_results(mse_results, list_of_indices, selected_index=None, ave
     plt.grid(True)
     plt.show()
 
-def visualize_results(mse_results, list_of_indices, selected_index=None, average=False, base_mse=None, normalize=False, title="Loss Visualization", ylabel="Loss"):
-    plt.figure(figsize=(12, 8))
+# def visualize_results(mse_results, list_of_indices, selected_index=None, average=False, base_mse=None, normalize=False, title="Loss Visualization", ylabel="Loss"):
+#     plt.figure(figsize=(12, 8))
+
+#     if average:
+#         # Prepare data for averages
+#         averages = {}
+#         for key, results in mse_results.items():
+#             averages[key] = [np.mean(results[k]) for k in results.keys()]
+
+#         # Normalize if required
+#         if normalize:
+#             max_value = max([max(values) for values in averages.values()])
+#             averages = {key: [val / max_value for val in values] for key, values in averages.items()}
+
+#         # Plot averages side by side
+#         for key, values in averages.items():
+#             plt.plot(list(mse_results[key].keys()), values, label=f"{key} (Average)", marker="o")
+
+#     elif selected_index is not None:
+#         # Plot for a specific index
+#         for key, results in mse_results.items():
+#             plt.plot(list(results.keys()), [results[k][selected_index] for k in results.keys()], label=f"{key} (Index {selected_index})", marker="o")
+
+#     else:
+#         # Plot all indices
+#         for key, results in mse_results.items():
+#             for idx, values in enumerate(zip(*results.values())):
+#                 plt.plot(list(results.keys()), values, label=f"{key} (Index {idx})", marker="o")
+
+#     if base_mse is not None:
+#         plt.axhline(y=base_mse, color="r", linestyle="--", label="Base MSE")
+
+#     plt.xlabel("K Neighbors")
+#     plt.ylabel(ylabel)
+#     plt.title(title)
+#     plt.legend()
+#     plt.grid(True)
+#     plt.show()
+
+def visualize_results(mse_results, list_of_indices, selected_index=None, average=False, base_mse=None, normalize=False, title="Loss Visualization", ylabel="Loss", max_points=None, max_knn=None):
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    plt.figure(figsize=(8, 4))
+
+    def keys_for(results):
+        # Ensure ks are sorted numeric K values
+        ks = sorted(list(results.keys()))
+        # If a maximum K value is supplied, only keep ks <= max_knn
+        if max_knn is not None:
+            ks = [k for k in ks if k <= max_knn]
+        # If a maximum count is supplied, trim to that many points
+        if max_points is not None:
+            ks = ks[:max_points]
+        return ks
 
     if average:
-        # Prepare data for averages
         averages = {}
         for key, results in mse_results.items():
-            averages[key] = [np.mean(results[k]) for k in results.keys()]
+            ks = keys_for(results)
+            if len(ks) == 0:
+                print(f"No k values selected for {key} (check max_knn/max_points).")
+                averages[key] = []
+                continue
+            averages[key] = [np.mean(results[k]) for k in ks]
 
-        # Normalize if required
-        if normalize:
-            max_value = max([max(values) for values in averages.values()])
-            averages = {key: [val / max_value for val in values] for key, values in averages.items()}
+        if normalize and any(len(v) > 0 for v in averages.values()):
+            max_value = max([max(values) for values in averages.values() if len(values) > 0])
+            if max_value != 0:
+                averages = {key: [val / max_value for val in values] for key, values in averages.items()}
 
-        # Plot averages side by side
         for key, values in averages.items():
-            plt.plot(list(mse_results[key].keys()), values, label=f"{key} (Average)", marker="o")
+            ks = keys_for(mse_results[key])
+            if len(ks) == 0:
+                continue
+            plt.plot(ks, values, label=f"{key} (Average)", marker="o")
 
     elif selected_index is not None:
-        # Plot for a specific index
         for key, results in mse_results.items():
-            plt.plot(list(results.keys()), [results[k][selected_index] for k in results.keys()], label=f"{key} (Index {selected_index})", marker="o")
+            ks = keys_for(results)
+            if len(ks) == 0:
+                continue
+            try:
+                plt.plot(ks, [results[k][selected_index] for k in ks], label=f"{key} (Index {selected_index})", marker="o")
+            except IndexError:
+                print(f"Selected index {selected_index} out of range for some k in {key}.")
 
     else:
-        # Plot all indices
         for key, results in mse_results.items():
-            for idx, values in enumerate(zip(*results.values())):
-                plt.plot(list(results.keys()), values, label=f"{key} (Index {idx})", marker="o")
+            ks = keys_for(results)
+            if len(ks) == 0:
+                continue
+            values_matrix = [results[k] for k in ks]
+            for idx, values in enumerate(zip(*values_matrix)):
+                plt.plot(ks, list(values), label=f"{key} (Index {idx})", marker="o")
 
     if base_mse is not None:
         plt.axhline(y=base_mse, color="r", linestyle="--", label="Base MSE")
