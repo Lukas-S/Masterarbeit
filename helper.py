@@ -562,8 +562,8 @@ def print_training_history(losses, val_losses=None, val_accuracies=None, show_la
             if va is not None:
                 line += f", Val Acc = {va:.4f}"
         print(line)
-        
-def plot_training_history(losses, val_losses=None, val_accuracies=None, show_last_n=None, title="Training / Validation Loss", figsize=(8,4)):
+
+def plot_training_history(losses, val_losses=None, val_accuracies=None, show_last_n=None, title="Training / Validation Loss", figsize=(12,8), markersize=3):
     """
     Plot training loss and optional validation loss (line plots).
 
@@ -573,8 +573,6 @@ def plot_training_history(losses, val_losses=None, val_accuracies=None, show_las
       val_accuracies: optional list of validation accuracies (not plotted here)
       show_last_n: if set, only plot the last N epochs
     """
-    import matplotlib.pyplot as plt
-    import numpy as np
 
     if show_last_n is not None:
         losses_plot = losses[-show_last_n:]
@@ -590,9 +588,9 @@ def plot_training_history(losses, val_losses=None, val_accuracies=None, show_las
         xs = list(range(1, len(losses_plot) + 1))
 
     plt.figure(figsize=figsize)
-    plt.plot(xs, losses_plot, label="Train Loss", marker="o")
+    plt.plot(xs, losses_plot, label="Train Loss", marker="o", markersize=markersize)
     if val_losses_plot is not None:
-        plt.plot(xs, val_losses_plot, label="Val Loss", marker="o")
+        plt.plot(xs, val_losses_plot, label="Val Loss", marker="o", markersize=markersize)
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.title(title)
