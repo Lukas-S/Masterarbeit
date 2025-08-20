@@ -816,3 +816,250 @@ def visualize_results(mse_results, list_of_indices, selected_index=None, average
     plt.legend()
     plt.grid(True)
     plt.show()
+
+
+def train_multiple_inits_and_plot(network_fn,
+                                  train_loader,
+                                  criterion,
+                                  optimizer_fn,
+                                  test_loader=None,
+                                  seeds=None,
+                                  num_epochs=150,
+                                  device=None,
+                                  plot_val=True,
+                                  figsize=(12,4),
+                                  markersize=3,
+                                  alpha=0.25,
+                                  colors=None,
+                                  title_prefix="Training Loss",
+                                  color_by_seed=True,
+                                  show_seed_legend=True,
+                                  seed_colors=None,
+                                  loss_view="train"):
+    """
+    Train the same network architecture multiple times with different initialization seeds,
+    capture training (and optional validation) losses and plot runs (thin dotted) + average (bold).
+
+    New args:
+      color_by_seed: assign a distinct color per seed for individual-run lines (default True)
+      show_seed_legend: add each seed's line to the legend (default True)
+      seed_colors: optional dict {seed: color} or list of colors (len == len(seeds))
+      loss_view: 'train' or 'val' - which loss to visualize (only one shown). Default 'train'.
+
+    Returns:
+      dict with train_runs, val_runs, avg_train, avg_val, seeds
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if loss_view not in ("train", "val"):
+        raise ValueError("loss_view must be 'train' or 'val'")
+
+    if seeds is None:
+        seeds = [42 + i for i in range(5)]
+
+    if colors is None:
+        colors = {"train": "C0", "val": "C1"}
+
+    # Build per-seed color mapping if requested
+    seed_color_map = {}
+    if color_by_seed:
+        if isinstance(seed_colors, dict):
+            for s in seeds:
+                seed_color_map[s] = seed_colors.get(s, None)
+        elif isinstance(seed_colors, (list, tuple)) and len(seed_colors) >= len(seeds):
+            for s, c in zip(seeds, seed_colors):
+                seed_color_map[s] = c
+        else:
+            cmap = plt.get_cmap('tab10' if len(seeds) <= 10 else 'tab20')
+            for i, s in enumerate(seeds):
+                seed_color_map[s] = cmap(i % cmap.N)
+
+    train_runs = []
+    val_runs = [] if test_loader is not None else None
+
+    for run_i, s in enumerate(seeds):
+        model = network_fn()
+        optimizer = optimizer_fn(model)
+
+        if test_loader is not None:
+            losses, trained_model, val_losses, val_accuracies = train_model(
+                model, train_loader, criterion, optimizer,
+                num_epochs=num_epochs, seed=s, verbose=False,
+                continue_training=False, test_loader=test_loader, return_val=True
+            )
+            val_runs.append(val_losses)
+        else:
+            losses, trained_model = train_model(
+                model, train_loader, criterion, optimizer,
+                num_epochs=num_epochs, seed=s, verbose=False,
+                continue_training=False, test_loader=None, return_val=False
+            )
+
+        train_runs.append(losses)
+
+    # Align lengths
+    min_epochs = min(len(r) for r in train_runs)
+    train_runs = [r[:min_epochs] for r in train_runs]
+    if val_runs is not None:
+        min_val_epochs = min(len(r) for r in val_runs)
+        val_runs = [r[:min_val_epochs] for r in val_runs]
+    else:
+        min_val_epochs = None
+
+    # Compute averages
+    avg_train = list(np.mean(np.vstack(train_runs), axis=0))
+    avg_val = list(np.mean(np.vstack(val_runs), axis=0)) if val_runs is not None else None
+
+    # Ensure requested loss_view is available
+    if loss_view == "val" and val_runs is None:
+        raise ValueError("loss_view='val' requested but no test_loader was provided (no val_runs available).")
+
+    # Plotting (only one of train or val, never both)
+    if loss_view == "train":
+        xs = np.arange(1, min_epochs + 1)
+        plt.figure(figsize=figsize)
+        for run_i, (r, s) in enumerate(zip(train_runs, seeds)):
+            line_color = seed_color_map.get(s) if color_by_seed else colors.get("train", "C0")
+            label = f"seed {s}" if show_seed_legend and color_by_seed else None
+            plt.plot(xs, r, linestyle=':', color=line_color, alpha=alpha, marker='.', markersize=markersize, label=label)
+        plt.plot(xs, avg_train, linestyle='-', color=colors.get("train", "C0"), linewidth=2.5, label='Avg Train Loss')
+        plt.xlabel("Epoch")
+        plt.ylabel("Train Loss")
+        plt.title(f"{title_prefix} - Train (n_seeds={len(seeds)}, epochs={min_epochs})")
+    else:  # loss_view == "val"
+        xs = np.arange(1, min_val_epochs + 1)
+        plt.figure(figsize=figsize)
+        for run_i, (r, s) in enumerate(zip(val_runs, seeds)):
+            line_color = seed_color_map.get(s) if color_by_seed else colors.get("val", "C1")
+            label = f"seed {s} (val)" if (show_seed_legend and color_by_seed) else None
+            plt.plot(xs, r, linestyle=':', color=line_color, alpha=alpha, marker='.', markersize=markersize, label=label)
+        plt.plot(xs, avg_val, linestyle='-', color=colors.get("val", "C1"), linewidth=2.5, label='Avg Val Loss')
+        plt.xlabel("Epoch")
+        plt.ylabel("Val Loss")
+        plt.title(f"{title_prefix} - Val (n_seeds={len(seeds)}, epochs={min_val_epochs})")
+
+    plt.grid(True)
+    # Manage legend: avoid duplicate entries if many seeds shown
+    if show_seed_legend:
+        handles, labels = plt.gca().get_legend_handles_labels()
+        seen = set()
+        new_h, new_l = [], []
+        for h, l in zip(handles, labels):
+            if l not in seen:
+                new_h.append(h); new_l.append(l); seen.add(l)
+        plt.legend(new_h, new_l, fontsize='small')
+    else:
+        plt.legend(fontsize='small')
+
+    plt.tight_layout()
+    plt.show()
+
+    return {
+        "train_runs": train_runs,
+        "val_runs": val_runs,
+        "avg_train": avg_train,
+        "avg_val": avg_val,
+        "seeds": seeds
+    }
+    
+def plot_knn_distance_stats(knn_distances,
+                            subset='closest',
+                            k=None,
+                            max_k=None,
+                            figsize=(8,4),
+                            show_min=True,
+                            show_max=True,
+                            show_mean=True,
+                            fill_between=True,
+                            title=None,
+                            xlabel="Neighbor index (1 = nearest)",
+                            ylabel="Distance",
+                            marker='o',
+                            color_mean='C0',
+                            color_min='C1',
+                            color_max='C2'):
+    """
+    Plot statistics (mean / min / max) of KNN distances for a chosen subset.
+
+    Args:
+      knn_distances: dict with keys like 'closest_distances','last_distances','random_distances'
+                     where each maps k -> list_of_samples_of_length_k
+      subset: one of 'closest','last','random' (selects the dict key `<subset>_distances`)
+      k: integer. If provided, use that exact k (must exist in data). If None, selected key is chosen by max_k or largest available.
+      max_k: if k is None, pick the largest available k <= max_k; if max_k is None pick largest available k.
+      figsize, show_min/max/mean, fill_between, title, labels/colors: plotting options.
+
+    Returns:
+      stats: dict with keys 'k', 'mean', 'min', 'max', each a list of length k
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    key = f"{subset}_distances"
+    if key not in knn_distances:
+        raise KeyError(f"knn_distances does not contain key '{key}'")
+
+    available_ks = sorted([int(x) for x in knn_distances[key].keys()])
+    if len(available_ks) == 0:
+        raise ValueError(f"No k entries found under '{key}'")
+
+    # select k to use
+    if k is not None:
+        if k not in available_ks:
+            raise ValueError(f"Requested k={k} not available for '{key}'. Available: {available_ks}")
+        k_sel = k
+    else:
+        if max_k is None:
+            k_sel = available_ks[-1]
+        else:
+            # pick largest available k <= max_k
+            cand = [kk for kk in available_ks if kk <= int(max_k)]
+            if not cand:
+                raise ValueError(f"No available k <= max_k ({max_k}). Available: {available_ks}")
+            k_sel = cand[-1]
+
+    # Gather sample distance lists for selected k and normalize/truncate to exact length k_sel
+    raw_lists = knn_distances[key].get(k_sel, [])
+    if len(raw_lists) == 0:
+        raise ValueError(f"No distance lists found for k={k_sel} in '{key}'")
+
+    # keep only samples with at least k_sel entries, trim extras
+    filtered = []
+    for lst in raw_lists:
+        try:
+            arr = np.asarray(lst, dtype=float)
+        except Exception:
+            continue
+        if arr.size >= k_sel:
+            filtered.append(arr[:k_sel])
+    if len(filtered) == 0:
+        raise ValueError(f"No valid distance arrays of length >= {k_sel} for '{key}'")
+
+    data = np.vstack(filtered)  # shape (n_samples, k_sel)
+
+    mean_vec = np.mean(data, axis=0)
+    min_vec = np.min(data, axis=0)
+    max_vec = np.max(data, axis=0)
+
+    xs = np.arange(1, k_sel + 1)
+
+    plt.figure(figsize=figsize)
+    if show_mean:
+        plt.plot(xs, mean_vec, label='mean', color=color_mean, marker=marker, linewidth=2, markersize=2)
+    if show_min:
+        plt.plot(xs, min_vec, label='min', color=color_min, linestyle='--', marker=None)
+    if show_max:
+        plt.plot(xs, max_vec, label='max', color=color_max, linestyle='--', marker=None)
+    if fill_between and show_min and show_max:
+        plt.fill_between(xs, min_vec, max_vec, color=color_mean, alpha=0.08)
+
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title or f"KNN distances ({subset}) — k={k_sel} — n_samples={data.shape[0]}")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+    return {"k": k_sel, "mean": mean_vec.tolist(), "min": min_vec.tolist(), "max": max_vec.tolist()}
