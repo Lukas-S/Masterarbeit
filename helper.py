@@ -325,6 +325,212 @@ def show_rgb_hsv_samples(rgb_data, hsv_data, indices=None):
         else:
             print(f"Index {idx} out of range (dataset size: {len(rgb_data)})")
 
+def showcase_iris_neighbors(X_train, y_train, knn_indices, knn_distances=None, X_test=None, y_test=None, query_index=None, feature_names=None):
+    """Text-based showcase for an Iris query (from test set) and its K nearest neighbors (from train set).
+
+    Args:
+        X_train, y_train: train arrays/tensors (N_train, 4) and labels
+        knn_indices: iterable of neighbor indices (indices into the train set)
+        knn_distances: optional iterable of distances corresponding to knn_indices
+        X_test, y_test: optional test arrays/tensors (N_test, 4) and labels used to display the query
+        query_index: index into X_test (if X_test provided) or into X_train if no X_test given
+        feature_names: optional list of 4 feature names
+    """
+    if feature_names is None:
+        feature_names = ['sepal_length', 'sepal_width', 'petal_length', 'petal_width']
+
+    # Prefer using test data for the query when available
+    if X_test is not None and query_index is not None:
+        Xq = X_test
+        yq = y_test
+        query_source = 'test'
+    else:
+        Xq = X_train
+        yq = y_train
+        query_source = 'train'
+
+    # Convert to CPU numpy for pretty printing
+    X_train_np = X_train.detach().cpu().numpy() if hasattr(X_train, 'detach') else np.asarray(X_train)
+    y_train_np = y_train.detach().cpu().numpy() if hasattr(y_train, 'detach') else np.asarray(y_train)
+
+    Xq_np = Xq.detach().cpu().numpy() if hasattr(Xq, 'detach') else np.asarray(Xq)
+    yq_np = yq.detach().cpu().numpy() if hasattr(yq, 'detach') else np.asarray(yq)
+
+    # Prepare printable arrays
+    class_names = ['setosa', 'versicolor', 'virginica']
+
+    # Ensure knn indices and distances are lists
+    knn_list = knn_indices.tolist() if hasattr(knn_indices, 'tolist') else list(knn_indices)
+    dist_list = None
+    if knn_distances is not None:
+        dist_list = knn_distances.tolist() if hasattr(knn_distances, 'tolist') else list(knn_distances)
+
+    # Header layout: Role, Index, Class, Distance, features
+    col_role = "Role"
+    col_idx = "Index"
+    col_class = "Class"
+    cols_feat = feature_names
+
+    # Column widths
+    w_role = 8
+    w_idx = 6
+    w_class = 12
+    w_dist = 10
+    w_feat = 12
+
+    # Print header
+    header_parts = [f"{col_role:<{w_role}}", f"{col_idx:<{w_idx}}", f"{col_class:<{w_class}}", f"{'Distance':<{w_dist}}"]
+    header_parts += [f"{fn:<{w_feat}}" for fn in cols_feat]
+    header = " ".join(header_parts)
+    sep = "-" * len(header)
+
+    print("Iris K-NN Showcase (Query from test set, neighbors from train set)")
+    print(sep)
+    print(header)
+    print(sep)
+
+    # Print query row first (if provided)
+    if query_index is not None:
+        q = Xq_np[int(query_index)]
+        q_label = int(yq_np[int(query_index)])
+        # Query has no distance
+        row_parts = [f"{'Query':<{w_role}}", f"{int(query_index):<{w_idx}}", f"{class_names[q_label]:<{w_class}}", f"{'':<{w_dist}}"]
+        row_parts += [f"{q[i]:<{w_feat}.2f}" for i in range(len(cols_feat))]
+        print(" ".join(row_parts))
+        print(sep)
+
+    # Print neighbors aligned under same columns
+    for i, idx in enumerate(knn_list):
+        idx_i = int(idx)
+        label_i = int(y_train_np[idx_i])
+        dist_i = float(dist_list[i]) if (dist_list is not None and i < len(dist_list)) else None
+        dist_str = f"{dist_i:.4f}" if dist_i is not None else ""
+        feats = X_train_np[idx_i]
+        row_parts = [f"{'Neighbor':<{w_role}}", f"{idx_i:<{w_idx}}", f"{class_names[label_i]:<{w_class}}", f"{dist_str:<{w_dist}}"]
+        row_parts += [f"{feats[j]:<{w_feat}.2f}" for j in range(len(cols_feat))]
+        print(" ".join(row_parts))
+    print(sep)
+
+
+def showcase_mnist_neighbors(train_dataloader, knn_indices, knn_distances=None, test_dataloader=None, query_index=None, n_cols=8, cmap='gray'):
+    """Show MNIST query and neighbors as images in a single visualization.
+
+    Args:
+        dataloader: DataLoader containing MNIST data
+        knn_indices: iterable of neighbor indices
+        knn_distances: optional iterable of distances matching knn_indices
+        query_index: optional int index of the query sample (will be shown first)
+        n_cols: columns in grid
+    """
+    # Build display: query from test_dataloader (if provided) then neighbors from train_dataloader
+    display_imgs = []
+    display_labels = []
+    titles = []
+
+    if test_dataloader is not None and query_index is not None:
+        q_imgs, q_labels = get_samples_by_indices(test_dataloader, query_index)
+        # q_imgs may be single sample
+        display_imgs.append(q_imgs[0])
+        display_labels.append(q_labels[0])
+        titles.append(f"Query idx={query_index}")
+
+    # Fetch neighbor images from train set
+    neigh_imgs, neigh_labels = get_samples_by_indices(train_dataloader, knn_indices)
+    for i in range(len(knn_indices)):
+        display_imgs.append(neigh_imgs[i])
+        display_labels.append(neigh_labels[i])
+        if knn_distances is not None and i < len(knn_distances):
+            titles.append(f"N{i+1} idx={int(knn_indices[i])}\n dist={float(knn_distances[i]):.4f}")
+        else:
+            titles.append(f"N{i+1} idx={int(knn_indices[i])}")
+
+    imgs = torch.stack(display_imgs) if isinstance(display_imgs[0], torch.Tensor) else np.stack(display_imgs)
+    labels = torch.tensor(display_labels) if isinstance(display_labels[0], (int, np.integer)) else np.array(display_labels)
+
+    n = len(display_imgs)
+    cols = min(n_cols, n)
+    rows = (n + cols - 1) // cols
+
+    fig, axes = plt.subplots(rows, cols, figsize=(cols*2, rows*2))
+    if isinstance(axes, np.ndarray):
+        axes = axes.flatten()
+    else:
+        axes = [axes]
+
+    for i in range(len(axes)):
+        ax = axes[i]
+        if i < n:
+            img = imgs[i]
+            ax.imshow(img.squeeze(), cmap=cmap)
+            title = titles[i]
+            # append true label
+            title += f"\nlabel={int(labels[i])}" if labels is not None else ''
+            ax.set_title(title, fontsize=8)
+            ax.axis('off')
+        else:
+            ax.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+
+def showcase_rgb_neighbors(rgb_train, knn_indices=None, knn_distances=None, rgb_test=None, query_index=None, hsv_train=None, hsv_test=None, square_size=40, n_cols=8):
+    """Visualize RGB query (from test set) and neighbor colors (from train set) as small colored squares.
+
+    Backwards compatible: if rgb_test is None, query_index will be taken from rgb_train.
+    """
+    # Build display: query from test set if provided, neighbors from train
+    display_colors = []
+    titles = []
+
+    if rgb_test is not None and query_index is not None:
+        rgb_test_np = rgb_test.detach().cpu().numpy() if hasattr(rgb_test, 'detach') else np.asarray(rgb_test)
+        display_colors.append(rgb_test_np[int(query_index)])
+        titles.append(f"Query idx={query_index}")
+    elif query_index is not None:
+        # fall back to train set for query
+        rgb_train_np_all = rgb_train.detach().cpu().numpy() if hasattr(rgb_train, 'detach') else np.asarray(rgb_train)
+        display_colors.append(rgb_train_np_all[int(query_index)])
+        titles.append(f"Query idx={query_index}")
+
+    # neighbors from train
+    rgb_train_np = rgb_train.detach().cpu().numpy() if hasattr(rgb_train, 'detach') else np.asarray(rgb_train)
+    hsv_train_np = hsv_train.detach().cpu().numpy() if (hsv_train is not None and hasattr(hsv_train, 'detach')) else (np.asarray(hsv_train) if hsv_train is not None else None)
+
+    if knn_indices is not None:
+        for i, idx in enumerate(knn_indices):
+            display_colors.append(rgb_train_np[int(idx)])
+            if knn_distances is not None and i < len(knn_distances):
+                titles.append(f"N{i+1} idx={int(idx)}\n dist={float(knn_distances[i]):.4f}")
+            else:
+                titles.append(f"N{i+1} idx={int(idx)}")
+
+    if len(display_colors) == 0:
+        print("No indices to display.")
+        return
+
+    n = len(display_colors)
+    cols = min(n_cols, n)
+    rows = (n + cols - 1) // cols
+
+    fig, axes = plt.subplots(rows, cols, figsize=(cols*2., rows*2))
+    if isinstance(axes, np.ndarray):
+        axes = axes.flatten()
+    else:
+        axes = [axes]
+
+    for i, ax in enumerate(axes):
+        if i < n:
+            color = np.clip(display_colors[i].reshape(1,1,3), 0, 1)
+            square = np.ones((square_size, square_size, 3), dtype=float) * color
+            ax.imshow(square)
+            ax.set_title(titles[i], fontsize=8)
+            ax.axis('off')
+        else:
+            ax.axis('off')
+
+    plt.tight_layout()
+    plt.show()
 def predict_and_show(model, dataloader, dataset_type='mnist', indices=None, device=None):
     """Make predictions and show results for specific indices. Returns multiple variables as tensors."""
     if device is None:
