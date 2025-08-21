@@ -1023,7 +1023,6 @@ def visualize_results(mse_results, list_of_indices, selected_index=None, average
     plt.grid(True)
     plt.show()
 
-
 def train_multiple_inits_and_plot(network_fn,
                                   train_loader,
                                   criterion,
